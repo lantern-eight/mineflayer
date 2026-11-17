@@ -109,6 +109,41 @@ for (const version of bedrockTestedVersions) {
       bot._client.emit('close')
     })
 
+    it('fires move, with the place before, on each tick the bot moved or turned, and not when it stood still', async function () {
+      // As mineflayer does on Java. Before, move fired only on a server correction or a teleport: a walk of sixteen blocks
+      // brought three of them, some five blocks apart. Seen live on a Bedrock Dedicated Server 1.26.60.
+      const { bot, sent } = makeBot(version) // no physics steps: only what the test changes moves the bot
+      const nextSend = () => new Promise(resolve => {
+        const count = sent.length
+        const check = setInterval(() => { if (sent.length > count) { clearInterval(check); resolve() } }, 5)
+      })
+      const moves = []
+      bot.on('move', from => moves.push({ from: { ...from }, to: { ...bot.entity.position } }))
+      bot.emit('spawn') // the first send runs at once and reports where the bot is
+      assert.strictEqual(moves.length, 1)
+
+      bot.entity.position.x = 1 // moved since the last send
+      await nextSend()
+      assert.strictEqual(moves.length, 2)
+      assert.strictEqual(moves[1].from.x, 0, 'the place before the move')
+      assert.strictEqual(moves[1].to.x, 1)
+
+      bot.entity.yaw = 1 // turned only
+      await nextSend()
+      assert.strictEqual(moves.length, 3)
+
+      await nextSend() // stood still
+      await nextSend()
+      assert.strictEqual(moves.length, 3, 'nothing to report')
+
+      // A correction fires move itself; the next send does not announce it again.
+      bot._client.emit('correct_player_move_prediction', { position: { x: 5, y: 65.62, z: 0 } })
+      assert.strictEqual(moves.length, 4)
+      await nextSend()
+      assert.strictEqual(moves.length, 4)
+      bot._client.emit('close')
+    })
+
     it('after the event loop stalls, a send makes up no more than two ticks of movement', async function () {
       // The server got no input while the loop was busy and kept the player still. Making up every missed tick at once
       // (up to 8) put a walking bot a block or more ahead of it; the server pulled the bot back a second later, after
